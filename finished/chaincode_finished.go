@@ -26,7 +26,7 @@ import (
 	"encoding/json"
 	"time"
 	"strings"
-
+	"log"
 	"github.com/hyperledger/fabric/core/chaincode/shim"
 )
 
@@ -34,32 +34,53 @@ import (
 type SimpleChaincode struct {
 }
 
-var marbleIndexStr = "_marbleindex"				//name for the key/value that will store a list of all known marbles
 var openTradesStr = "_opentrades"				//name for the key/value that will store all open trades
 
-type Marble struct{
-	Name string `json:"name"`					//the fieldtags are needed to keep case from bouncing around
-	Color string `json:"color"`
-	Size int `json:"size"`
-	User string `json:"user"`
-	InvoiceNumber string `json:invoicenumber`
-}
 
-type Description struct{
-	Color string `json:"color"`
-	Size int `json:"size"`
-}
+var invoiceIndexStr = "_invoiceindex" 
+var accountIndexStr = "_accountindex"
+var paymentIndexStr = "_paymentindex"
 
-type AnOpenTrade struct{
-	User string `json:"user"`					//user who created the open trade order
-	Timestamp int64 `json:"timestamp"`			//utc timestamp of creation
-	Want Description  `json:"want"`				//description of desired marble
-	Willing []Description `json:"willing"`		//array of marbles willing to trade away
-}
+//for invoice
+type Invoice struct{
+	VendorID string `json:"vendorid"`
+	CustomerID string `json:"customerid"`
+	InvoiceNumber string `json:"invoicenumber"`	
+	InvoiceAmount float64 `json:"invoiceamount"`
+	Currency string `json:"currency"`	
+	Material string `json:"material"`
+	Quantity int `json:"quantity"`
+	TradeID string `json:"tradeid"`
+	PaymentDate string `json:"paymentdate"`
+	Status string `json:"status"`
+	NewPaymentDate string `json:"newpaymentdate"`
+} 
 
-type AllTrades struct{
-	OpenTrades []AnOpenTrade `json:"open_trades"`
-}
+//for account
+type Invoice struct{
+	ID string `json:"vendorid"`
+	AccountName string `json:"accountname"`
+	AccountType string `json:"accounttype"`	
+	Address string `json:"address"`
+	BankAccountNumber int `json:"bankaccountnumber"`	
+	Phone string `json:"phone"`
+	BankerID string `json:"bankerid"`
+
+} 
+
+//for payment
+type Invoice struct{
+	PaymentID string `json:"paymentId"`
+	VendorID string `json:"vendorid"`
+	CustomerID string `json:"customerid"`
+	InvoiceID string `json:"invoiceid"`	
+	Amount float64 `json:"amount"`
+	Currency string `json:"currency"`
+	BankerID string `json:"bankerid"	
+	PaymentDate string `json:"paymentdate"`
+	TradeID string `json:"tradeid"`
+	NewPaymentDate string `json:"newpaymentdate"`
+} 
 
 // ============================================================================================================================
 // Main
@@ -77,7 +98,7 @@ func main() {
 func (t *SimpleChaincode) Init(stub shim.ChaincodeStubInterface, function string, args []string) ([]byte, error) {
 	var Aval int
 	var err error
-
+	fmt.Printf("intot init")
 	if len(args) != 1 {
 		return nil, errors.New("Incorrect number of arguments. Expecting 1")
 	}
@@ -96,7 +117,14 @@ func (t *SimpleChaincode) Init(stub shim.ChaincodeStubInterface, function string
 	
 	var empty []string
 	jsonAsBytes, _ := json.Marshal(empty)								//marshal an emtpy array of strings to clear the index
-	err = stub.PutState(marbleIndexStr, jsonAsBytes)
+	err = stub.PutState(invoiceIndexStr, jsonAsBytes)
+	if err != nil {
+		return nil, err
+	}
+	
+	var emptyInv []string
+	jsonAsBytesInv, _ := json.Marshal(emptyInv)								//marshal an emtpy array of strings to clear the index
+	err = stub.PutState(invoiceIndexStr, jsonAsBytesInv)
 	if err != nil {
 		return nil, err
 	}
@@ -119,25 +147,24 @@ func (t *SimpleChaincode) Run(stub shim.ChaincodeStubInterface, function string,
 	return t.Invoke(stub, function, args)
 }
 
-
 // ============================================================================================================================
 // Invoke - Our entry point for Invocations
 // ============================================================================================================================
 func (t *SimpleChaincode) Invoke(stub shim.ChaincodeStubInterface, function string, args []string) ([]byte, error) {
-	fmt.Println("invoke is running mekyush " + function)
+	fmt.Println("invoke is running " + function)
 
 	// Handle different functions
 	if function == "init" {													//initialize the chaincode state, used as reset
 		return t.Init(stub, "init", args)
-	} else if function == "delete" {										//deletes an entity from its state
-		res, err := t.Delete(stub, args)
-		cleanTrades(stub)													//lets make sure all open trades are still valid
-		return res, err
 	} else if function == "write" {											//writes a value to the chaincode state
 		return t.Write(stub, args)
-	} else if function == "init_abc" {									//create a new marble
-		return t.init_abc(stub, args)
-	} else if function == "set_user" {										//change owner of a marble
+	} else if function == "create_invoice" {									//create a new invoice
+		return t.create_invoice(stub, args)
+	else if function == "create_account" {									//create a new account
+		return t.create_invoice(stub, args)
+	else if function == "create_payment" {									//create a new payment
+		return t.create_invoice(stub, args)
+	} else if function == "set_user" {										//change owner of a invoice
 		res, err := t.set_user(stub, args)
 		cleanTrades(stub)													//lets make sure all open trades are still valid
 		return res, err
@@ -191,44 +218,7 @@ func (t *SimpleChaincode) read(stub shim.ChaincodeStubInterface, args []string) 
 	return valAsbytes, nil													//send it onward
 }
 
-// ============================================================================================================================
-// Delete - remove a key/value pair from state
-// ============================================================================================================================
-func (t *SimpleChaincode) Delete(stub shim.ChaincodeStubInterface, args []string) ([]byte, error) {
-	if len(args) != 1 {
-		return nil, errors.New("Incorrect number of arguments. Expecting 1")
-	}
-	
-	name := args[0]
-	err := stub.DelState(name)													//remove the key from chaincode state
-	if err != nil {
-		return nil, errors.New("Failed to delete state")
-	}
 
-	//get the marble index
-	marblesAsBytes, err := stub.GetState(marbleIndexStr)
-	if err != nil {
-		return nil, errors.New("Failed to get marble index")
-	}
-	var marbleIndex []string
-	json.Unmarshal(marblesAsBytes, &marbleIndex)								//un stringify it aka JSON.parse()
-	
-	//remove marble from index
-	for i,val := range marbleIndex{
-		fmt.Println(strconv.Itoa(i) + " - looking at " + val + " for " + name)
-		if val == name{															//find the correct marble
-			fmt.Println("found marble")
-			marbleIndex = append(marbleIndex[:i], marbleIndex[i+1:]...)			//remove it
-			for x:= range marbleIndex{											//debug prints...
-				fmt.Println(string(x) + " - " + marbleIndex[x])
-			}
-			break
-		}
-	}
-	jsonAsBytes, _ := json.Marshal(marbleIndex)									//save new index
-	err = stub.PutState(marbleIndexStr, jsonAsBytes)
-	return nil, nil
-}
 
 // ============================================================================================================================
 // Write - write variable into chaincode state
@@ -251,95 +241,236 @@ func (t *SimpleChaincode) Write(stub shim.ChaincodeStubInterface, args []string)
 	return nil, nil
 }
 
-// ============================================================================================================================
-// Init Marble - create a new marble, store into chaincode state
-// ============================================================================================================================
-func (t *SimpleChaincode) init_abc(stub shim.ChaincodeStubInterface, args []string) ([]byte, error) {
-	var err error
-	fmt.Println("into init_abc 1")
-	//   0       1       2     3
-	// "asdf", "blue", "35", "bob"
-	/*if len(args) != 5 {
-		return nil, errors.New("Incorrect number of arguments. Expecting 4")
-	}*/
-	fmt.Println("into init_abc 2")
 
+//this is for invoice
+func (t *SimpleChaincode) create_invoice(stub shim.ChaincodeStubInterface, args []string) ([]byte, error) {
+	var err error
+
+	if len(args) != 11 {
+		return nil, errors.New("Incorrect number of arguments. Expecting 11")
+	}
+	
 	//input sanitation
-	fmt.Println("- start init marble")
+	fmt.Println("- start init invoice")
 	if len(args[0]) <= 0 {
+		// Vendor ID //
 		return nil, errors.New("1st argument must be a non-empty string")
 	}
 	if len(args[1]) <= 0 {
+		// Customer ID //
 		return nil, errors.New("2nd argument must be a non-empty string")
 	}
 	if len(args[2]) <= 0 {
+		//Invoice Number //
 		return nil, errors.New("3rd argument must be a non-empty string")
 	}
 	if len(args[3]) <= 0 {
+		// Invoice Amount //
 		return nil, errors.New("4th argument must be a non-empty string")
 	}
 	if len(args[4]) <= 0 {
+		// Currency //
 		return nil, errors.New("5th argument must be a non-empty string")
 	}
-	
-	fmt.Println("into init_abc 3")
-	
-	name := args[0]
-	color := strings.ToLower(args[1])
-	user := strings.ToLower(args[3])
-	invoicenumber := strings.ToLower(args[4])
-	size, err := strconv.Atoi(args[2])
-	
-	fmt.Println("into init_abc 4")
-	
+	if len(args[5]) <= 0 {
+		// Material //
+		return nil, errors.New("6th argument must be a non-empty string")
+	}
+	if len(args[6]) <= 0 {
+		// Quantity //
+		return nil, errors.New("7th argument must be a non-empty string")
+	}
+	if len(args[7]) <= 0 {
+		// Trader ID //
+		return nil, errors.New("8th argument must be a non-empty string")
+	}
+	if len(args[8]) <= 0 {
+		// Payment Date //
+		return nil, errors.New("9th argument must be a non-empty string")
+	}
+	if len(args[9]) <= 0 {
+		// Status //
+		return nil, errors.New("10th argument must be a non-empty string")
+	}
+	if len(args[10]) <= 0 {
+		// New Payment Date //
+		return nil, errors.New("11th argument must be a non-empty string")
+	}
+	VendorID := args[0]
+	CustomerID := args[1]
+	InvoiceNumber := args[2]
+	InvoiceAmount := args[3]
+	Currency := args[4]
+	Material := args[5]
+	Quantity := args[6]
+	TraderID := args[7]
+	PaymentDate := args[8]
+	Status := args[9]
+	NewPaymentDate := args[10]
+
 	if err != nil {
 		return nil, errors.New("3rd argument must be a numeric string")
 	}
-	fmt.Println("into init_abc 5")
-	//check if marble already exists
-	marbleAsBytes, err := stub.GetState(name)
-	fmt.Println("into init_abc 6")
+
+	//check if invoice already exists
+	invoiceAsBytes, err := stub.GetState(InvoiceNumber)
 	if err != nil {
-		return nil, errors.New("Failed to get marble name")
+		return nil, errors.New("Failed to get Invoice number")
 	}
-	fmt.Println("into init_abc 7")
-	res := Marble{}
-	json.Unmarshal(marbleAsBytes, &res)
-	fmt.Println("into init_abc 8")
-	if res.Name == name{
-		fmt.Println("This marble arleady exists: " + name)
+	res := Invoice{}
+	json.Unmarshal(invoiceAsBytes, &res)
+	if res.InvoiceNumber == InvoiceNumber{
+		fmt.Println("This invoice arleady exists: " + InvoiceNumber)
 		fmt.Println(res);
-		return nil, errors.New("This marble arleady exists")				//all stop a marble by this name exists
+		return nil, errors.New("This invoice arleady exists")				//all stop a invoice by this name exists
 	}
-	fmt.Println("into init_abc 9")
-	//build the marble json string manually
-	str := `{"name": "` + name + `", "color": "` + color + `", "size": ` + strconv.Itoa(size) + `, "user": "` + user + `","invoicenumber":"`+invoicenumber+`"}`
-	err = stub.PutState(name, []byte(str))									//store marble with id as key
-	fmt.Println("into init_abc 10")
+	
+	
+
+	str := `{"vendorid": "` + VendorID + `", "customerid": "` + CustomerID + `", "invoicenumber": "` + InvoiceNumber + `", "invoiceamount": ` + InvoiceAmount + `, "currency": "` + Currency + `", "material": "` + Material + `","quantity":` + Quantity + `,"traderid":"` + TraderID + `","paymentdate":"` + PaymentDate + `","Status":"` + Status + `","newpaymentdate":"` + NewPaymentDate + `"}`
+	err = stub.PutState(VendorID, []byte(str))									//store invoice with id as key
 	if err != nil {
 		return nil, err
 	}
 		
-	//get the marble index
-	marblesAsBytes, err := stub.GetState(marbleIndexStr)
+	//get the invoice index
+	invoicesAsBytes, err := stub.GetState(invoiceIndexStr)
 	if err != nil {
-		return nil, errors.New("Failed to get marble index")
+		return nil, errors.New("Failed to get invoice index")
 	}
-	var marbleIndex []string
-	json.Unmarshal(marblesAsBytes, &marbleIndex)							//un stringify it aka JSON.parse()
+	var invoiceIndex []string
+	json.Unmarshal(invoicesAsBytes, &invoiceIndex)							//un stringify it aka JSON.parse()
 	
 	//append
-	marbleIndex = append(marbleIndex, name)									//add marble name to index list
-	fmt.Println("! marble index: ", marbleIndex)
-	jsonAsBytes, _ := json.Marshal(marbleIndex)
-	err = stub.PutState(marbleIndexStr, jsonAsBytes)						//store name of marble
+	invoiceIndex = append(invoiceIndex, VendorID)									//add invoice name to index list
+	fmt.Println("! invoice index: ", invoiceIndex)
+	jsonAsBytes, _ := json.Marshal(invoiceIndex)
+	err = stub.PutState(invoiceIndexStr, jsonAsBytes)						//store name of invoice
 
-	fmt.Println("- end init marble")
+	fmt.Println("- end init invoice")
 	return nil, nil
-}
+} 
 
+//this is for account
+
+	 string `json:"vendorid"`
+	 string `json:"accountname"`
+	 string `json:"accounttype"`	
+	 string `json:"address"`
+	  int `json:"bankaccount"`	
+	 string `json:"phone"`
+	 string `json:"bankerid"`
+	
+func (t *SimpleChaincode) create_account(stub shim.ChaincodeStubInterface, args []string) ([]byte, error) {
+	var err error
+
+	
+	ID := args[0]
+	AccountName := args[1]
+	AccountType := args[2]
+	InvoiceAmount := args[3]
+	Address := args[4]
+	BankAccountNumber := args[5]
+	Phone := args[6]
+	BankerID := args[7]
+
+	
+
+	//check if account already exists
+	accountAsBytes, err := stub.GetState(ID)
+	if err != nil {
+		return nil, errors.New("Failed to get account")
+	}
+	res := Account{}
+	json.Unmarshal(accountAsBytes, &res)
+	if res.ID == ID{
+		fmt.Println("This invoice arleady exists: " + ID)
+		fmt.Println(res);
+		return nil, errors.New("This account arleady exists")				
+	}
+	
+	
+	str := `{"ID": "` + ID + `", "AccountName": "` + AccountName + `", "AccountType": "` + AccountType + `", "InvoiceAmount": ` + InvoiceAmount + `, "Address": "` + Address + `", "BankAccountNumber": "` + BankAccountNumber + `","Phone":` + Phone + `,"traderid":"` + TraderID + `","BankerID":"` + BankerID + `"}`
+	
+	err = stub.PutState(ID, []byte(str))									
+	if err != nil {
+		return nil, err
+	}
+		
+	//get the account index
+	accountAsBytes, err := stub.GetState(accountIndexStr)
+	if err != nil {
+		return nil, errors.New("Failed to get account index")
+	}
+	var invoiceIndex []string
+	json.Unmarshal(invoicesAsBytes, &invoiceIndex)							//un stringify it aka JSON.parse()
+	
+	//append
+	accountIndex = append(accountIndex, ID)									//add account id to index list
+	fmt.Println("! invoice index: ", accountAsBytes)
+	jsonAsBytes, _ := json.Marshal(accountAsBytes)
+	err = stub.PutState(accountIndexStr, jsonAsBytes)						//store name of account
+
+	fmt.Println("- end init account")
+	return nil, nil
+} 
+//create payment
+func (t *SimpleChaincode) create_payment(stub shim.ChaincodeStubInterface, args []string) ([]byte, error) {
+	var err error
+
+	PaymentID := args[0]
+	VendorID := args[1]
+	CustomerID := args[2]
+	InvoiceID := args[3]
+	Amount := args[4]
+	Currency := args[5]
+	BankerID := args[6]
+	PaymentDate := args[7]
+	TraderID := args[8]
+	NewPaymentDate := args[9]
+
+	
+
+	//check if payment already exists
+	paymentAsBytes, err := stub.GetState(ID)
+	if err != nil {
+		return nil, errors.New("Failed to get payment")
+	}
+	res := Payment{}
+	json.Unmarshal(paymentAsBytes, &res)
+	if res.ID == ID{
+		fmt.Println("This invoice arleady exists: " + ID)
+		fmt.Println(res);
+		return nil, errors.New("This account arleady exists")				
+	}
+	
+	
+	str := `{"vendorid": "` + VendorID + `", "customerid": "` + CustomerID + `", "InvoiceID": "` + InvoiceID + `", "Amount": ` + Amount + `, "currency": "` + Currency + `", "BankerID": "` + BankerID + `","paymentdate":"` + PaymentDate + `","traderid":"` + TraderID + `","newpaymentdate":"` + NewPaymentDate + `"}`
+	
+	err = stub.PutState(ID, []byte(str))									
+	if err != nil {
+		return nil, err
+	}
+		
+	//get the account index
+	paymentAsBytes, err := stub.GetState(accountIndexStr)
+	if err != nil {
+		return nil, errors.New("Failed to get account index")
+	}
+	var paymentIndex []string
+	json.Unmarshal(invoicesAsBytes, &paymentIndex)							//un stringify it aka JSON.parse()
+	
+	//append
+	paymentIndex = append(paymentIndex, ID)									//add account id to index list
+	fmt.Println("! invoice index: ", paymentAsBytes)
+	jsonAsBytes, _ := json.Marshal(paymentAsBytes)
+	err = stub.PutState(accountIndexStr, jsonAsBytes)						//store name of account
+
+	fmt.Println("- end init account")
+	return nil, nil
+} 
 // ============================================================================================================================
-// Set User Permission on Marble
+// Set User Permission on invoice
 // ============================================================================================================================
 func (t *SimpleChaincode) set_user(stub shim.ChaincodeStubInterface, args []string) ([]byte, error) {
 	var err error
@@ -352,16 +483,16 @@ func (t *SimpleChaincode) set_user(stub shim.ChaincodeStubInterface, args []stri
 	
 	fmt.Println("- start set user")
 	fmt.Println(args[0] + " - " + args[1])
-	marbleAsBytes, err := stub.GetState(args[0])
+	invoiceAsBytes, err := stub.GetState(args[0])
 	if err != nil {
 		return nil, errors.New("Failed to get thing")
 	}
-	res := Marble{}
-	json.Unmarshal(marbleAsBytes, &res)										//un stringify it aka JSON.parse()
+	res := invoice{}
+	json.Unmarshal(invoiceAsBytes, &res)										//un stringify it aka JSON.parse()
 	res.User = args[1]														//change the user
 	
 	jsonAsBytes, _ := json.Marshal(res)
-	err = stub.PutState(args[0], jsonAsBytes)								//rewrite the marble with id as key
+	err = stub.PutState(args[0], jsonAsBytes)								//rewrite the invoice with id as key
 	if err != nil {
 		return nil, err
 	}
@@ -371,7 +502,7 @@ func (t *SimpleChaincode) set_user(stub shim.ChaincodeStubInterface, args []stri
 }
 
 // ============================================================================================================================
-// Open Trade - create an open trade for a marble you want with marbles you have 
+// Open Trade - create an open trade for a invoice you want with invoices you have 
 // ============================================================================================================================
 func (t *SimpleChaincode) open_trade(stub shim.ChaincodeStubInterface, args []string) ([]byte, error) {
 	var err error
@@ -477,26 +608,26 @@ func (t *SimpleChaincode) perform_trade(stub shim.ChaincodeStubInterface, args [
 			fmt.Println("found the trade");
 			
 			
-			marbleAsBytes, err := stub.GetState(args[2])
+			invoiceAsBytes, err := stub.GetState(args[2])
 			if err != nil {
 				return nil, errors.New("Failed to get thing")
 			}
-			closersMarble := Marble{}
-			json.Unmarshal(marbleAsBytes, &closersMarble)											//un stringify it aka JSON.parse()
+			closersinvoice := invoice{}
+			json.Unmarshal(invoiceAsBytes, &closersinvoice)											//un stringify it aka JSON.parse()
 			
-			//verify if marble meets trade requirements
-			if closersMarble.Color != trades.OpenTrades[i].Want.Color || closersMarble.Size != trades.OpenTrades[i].Want.Size {
-				msg := "marble in input does not meet trade requriements"
+			//verify if invoice meets trade requirements
+			if closersinvoice.Color != trades.OpenTrades[i].Want.Color || closersinvoice.Size != trades.OpenTrades[i].Want.Size {
+				msg := "invoice in input does not meet trade requriements"
 				fmt.Println(msg)
 				return nil, errors.New(msg)
 			}
 			
-			marble, e := findMarble4Trade(stub, trades.OpenTrades[i].User, args[4], size)			//find a marble that is suitable from opener
+			invoice, e := findinvoice4Trade(stub, trades.OpenTrades[i].User, args[4], size)			//find a invoice that is suitable from opener
 			if(e == nil){
 				fmt.Println("! no errors, proceeding")
 
-				t.set_user(stub, []string{args[2], trades.OpenTrades[i].User})						//change owner of selected marble, closer -> opener
-				t.set_user(stub, []string{marble.Name, args[1]})									//change owner of selected marble, opener -> closer
+				t.set_user(stub, []string{args[2], trades.OpenTrades[i].User})						//change owner of selected invoice, closer -> opener
+				t.set_user(stub, []string{invoice.Name, args[1]})									//change owner of selected invoice, opener -> closer
 			
 				trades.OpenTrades = append(trades.OpenTrades[:i], trades.OpenTrades[i+1:]...)		//remove trade
 				jsonAsBytes, _ := json.Marshal(trades)
@@ -512,42 +643,42 @@ func (t *SimpleChaincode) perform_trade(stub shim.ChaincodeStubInterface, args [
 }
 
 // ============================================================================================================================
-// findMarble4Trade - look for a matching marble that this user owns and return it
+// findinvoice4Trade - look for a matching invoice that this user owns and return it
 // ============================================================================================================================
-func findMarble4Trade(stub shim.ChaincodeStubInterface, user string, color string, size int )(m Marble, err error){
-	var fail Marble;
-	fmt.Println("- start find marble 4 trade")
+func findinvoice4Trade(stub shim.ChaincodeStubInterface, user string, color string, size int )(m invoice, err error){
+	var fail invoice;
+	fmt.Println("- start find invoice 4 trade")
 	fmt.Println("looking for " + user + ", " + color + ", " + strconv.Itoa(size));
 
-	//get the marble index
-	marblesAsBytes, err := stub.GetState(marbleIndexStr)
+	//get the invoice index
+	invoicesAsBytes, err := stub.GetState(invoiceIndexStr)
 	if err != nil {
-		return fail, errors.New("Failed to get marble index")
+		return fail, errors.New("Failed to get invoice index")
 	}
-	var marbleIndex []string
-	json.Unmarshal(marblesAsBytes, &marbleIndex)								//un stringify it aka JSON.parse()
+	var invoiceIndex []string
+	json.Unmarshal(invoicesAsBytes, &invoiceIndex)								//un stringify it aka JSON.parse()
 	
-	for i:= range marbleIndex{													//iter through all the marbles
-		//fmt.Println("looking @ marble name: " + marbleIndex[i]);
+	for i:= range invoiceIndex{													//iter through all the invoices
+		//fmt.Println("looking @ invoice name: " + invoiceIndex[i]);
 
-		marbleAsBytes, err := stub.GetState(marbleIndex[i])						//grab this marble
+		invoiceAsBytes, err := stub.GetState(invoiceIndex[i])						//grab this invoice
 		if err != nil {
-			return fail, errors.New("Failed to get marble")
+			return fail, errors.New("Failed to get invoice")
 		}
-		res := Marble{}
-		json.Unmarshal(marbleAsBytes, &res)										//un stringify it aka JSON.parse()
+		res := invoice{}
+		json.Unmarshal(invoiceAsBytes, &res)										//un stringify it aka JSON.parse()
 		//fmt.Println("looking @ " + res.User + ", " + res.Color + ", " + strconv.Itoa(res.Size));
 		
 		//check for user && color && size
 		if strings.ToLower(res.User) == strings.ToLower(user) && strings.ToLower(res.Color) == strings.ToLower(color) && res.Size == size{
-			fmt.Println("found a marble: " + res.Name)
-			fmt.Println("! end find marble 4 trade")
+			fmt.Println("found a invoice: " + res.Name)
+			fmt.Println("! end find invoice 4 trade")
 			return res, nil
 		}
 	}
 	
-	fmt.Println("- end find marble 4 trade - error")
-	return fail, errors.New("Did not find marble to use in this trade")
+	fmt.Println("- end find invoice 4 trade - error")
+	return fail, errors.New("Did not find invoice to use in this trade")
 }
 
 // ============================================================================================================================
@@ -621,9 +752,9 @@ func cleanTrades(stub shim.ChaincodeStubInterface)(err error){
 		fmt.Println(strconv.Itoa(i) + ": looking at trade " + strconv.FormatInt(trades.OpenTrades[i].Timestamp, 10))
 		
 		fmt.Println("# options " + strconv.Itoa(len(trades.OpenTrades[i].Willing)))
-		for x:=0; x<len(trades.OpenTrades[i].Willing); {														//find a marble that is suitable
+		for x:=0; x<len(trades.OpenTrades[i].Willing); {														//find a invoice that is suitable
 			fmt.Println("! on next option " + strconv.Itoa(i) + ":" + strconv.Itoa(x))
-			_, e := findMarble4Trade(stub, trades.OpenTrades[i].User, trades.OpenTrades[i].Willing[x].Color, trades.OpenTrades[i].Willing[x].Size)
+			_, e := findinvoice4Trade(stub, trades.OpenTrades[i].User, trades.OpenTrades[i].Willing[x].Color, trades.OpenTrades[i].Willing[x].Size)
 			if(e != nil){
 				fmt.Println("! errors with this option, removing option")
 				didWork = true
@@ -645,6 +776,7 @@ func cleanTrades(stub shim.ChaincodeStubInterface)(err error){
 			didWork = true
 			trades.OpenTrades = append(trades.OpenTrades[:i], trades.OpenTrades[i+1:]...)					//remove this trade
 			i--;
+			
 		}
 		
 		i++
